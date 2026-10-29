@@ -62,6 +62,7 @@ class CoreControl {
     String path, {
     Map<String, String>? query,
     Map<String, Object>? body,
+    Duration responseTimeout = const Duration(seconds: 8),
   }) async {
     final client = _http;
     if (client == null) throw StateError('Ядро отключено.');
@@ -80,7 +81,7 @@ class CoreControl {
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
     }
-    final response = await request.close().timeout(const Duration(seconds: 8));
+    final response = await request.close().timeout(responseTimeout);
     final text = await utf8.decoder
         .bind(response)
         .join()
@@ -107,7 +108,50 @@ class CoreControl {
   }
 
   Future<void> select(String tag) async {
+    final revision = generation;
+    void ensureCurrent() {
+      if (generation != revision || !active) {
+        throw StateError('Сессия VPN изменилась.');
+      }
+    }
+
+    if (tag == 'auto') {
+      // Сначала обновляем историю каждого профиля, включая удаление старого
+      // удачного пинга после отказа. До проверки рабочий выбор не меняется.
+      final group = await _request('GET', '/proxies/auto');
+      ensureCurrent();
+      final tags = (group['all'] as List).cast<String>();
+      final results = await check(tags);
+      ensureCurrent();
+      final available = results
+          .where((e) => e.available)
+          .map((e) => e.tag)
+          .toSet();
+      if (available.isEmpty) {
+        throw const FormatException(
+          'Нет доступных серверов. Автовыбор не включён; предыдущий выбор сохранён.',
+        );
+      }
+      // Проверки отдельных outbound обновляют историю, но сами по себе
+      // не пересчитывают выбор URLTest. Запрашиваем пересчёт всей группы.
+      await _request(
+        'GET',
+        '/group/auto/delay',
+        query: {'timeout': '5000', 'url': checkUrl},
+        responseTimeout: const Duration(seconds: 30),
+      );
+      ensureCurrent();
+      final refreshed = await _request('GET', '/proxies/auto');
+      ensureCurrent();
+      if (!available.contains(refreshed['now'])) {
+        throw const FormatException(
+          'Ядро не подтвердило доступный сервер. Предыдущий выбор сохранён. Повторите проверку.',
+        );
+      }
+    }
+    ensureCurrent();
     await _request('PUT', '/proxies/proxy', body: {'name': tag});
+    ensureCurrent();
     final selected = await _request('GET', '/proxies/proxy');
     if (selected['now'] != tag) {
       throw const FormatException('Ядро не подтвердило выбор сервера.');
@@ -116,9 +160,13 @@ class CoreControl {
   }
 
   Future<List<EndpointCheck>> check(List<String> tags) async {
+    final revision = generation;
     final results = <EndpointCheck>[];
     // Не более двух HTTPS-проб одновременно.
     for (var i = 0; i < tags.length; i += 2) {
+      if (revision != generation || !active) {
+        throw StateError('Сессия VPN изменилась.');
+      }
       final batch = await Future.wait(
         tags.skip(i).take(2).map((tag) async {
           try {
@@ -128,7 +176,7 @@ class CoreControl {
               query: {'timeout': '5000', 'url': checkUrl},
             );
             final delay = (data['delay'] as num?)?.toInt();
-            if (delay == null || delay < 0) throw const FormatException();
+            if (delay == null || delay <= 0) throw const FormatException();
             return EndpointCheck(
               tag: tag,
               time: DateTime.now(),
@@ -143,6 +191,9 @@ class CoreControl {
           }
         }),
       );
+      if (revision != generation || !active) {
+        throw StateError('Сессия VPN изменилась.');
+      }
       results.addAll(batch);
       onChecks(batch);
     }
@@ -178,7 +229,15 @@ class CoreControl {
       final delay = (last['delay'] as num?)?.toInt();
       if (time != null && delay != null && _history[entry.key] != time) {
         _history[entry.key] = time;
-        checks.add(EndpointCheck(tag: entry.key, time: time, delayMs: delay));
+        checks.add(
+          delay > 0
+              ? EndpointCheck(tag: entry.key, time: time, delayMs: delay)
+              : EndpointCheck(
+                  tag: entry.key,
+                  time: time,
+                  error: 'Последняя проверка ядра не пройдена.',
+                ),
+        );
       }
     }
     if (checks.isNotEmpty) onChecks(checks);

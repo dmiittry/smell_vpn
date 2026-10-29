@@ -94,7 +94,17 @@ abstract class ControlledVpnEngine implements VpnEngine {
     Map<String, String> profileNames = const {},
   }) async {
     if (control.active) throw StateError('Ядро уже запущено.');
-    final controlled = await control.configure(config);
+    final initial = jsonDecode(config) as Map<String, dynamic>;
+    final selector = (initial['outbounds'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((e) => e['tag'] == 'proxy');
+    final automatic = selector['default'] == 'auto';
+    if (automatic) {
+      selector['default'] = (selector['outbounds'] as List).firstWhere(
+        (e) => e != 'auto',
+      );
+    }
+    final controlled = await control.configure(jsonEncode(initial));
     final generation = control.generation;
     try {
       await startCore(
@@ -105,6 +115,7 @@ abstract class ControlledVpnEngine implements VpnEngine {
         profileNames: profileNames,
       );
       await control.waitReady().timeout(const Duration(seconds: 12));
+      if (automatic) await control.select('auto');
       control.startPolling();
     } catch (_) {
       if (generation == control.generation) {

@@ -23,7 +23,12 @@ class ConfigBuilder {
       applications: applications,
       diagnostic: diagnostic,
     );
-    final tags = catalog.profiles.map((e) => e.tag).toList();
+    final tags = [
+      if (catalog.automatic) catalog.selected!.tag,
+      ...catalog.profiles
+          .where((e) => !catalog.automatic || e.id != catalog.selectedId)
+          .map((e) => e.tag),
+    ];
     config['outbounds'] = [
       {
         'type': 'selector',

@@ -20,6 +20,7 @@ class AppController extends ChangeNotifier {
   String? activeTag;
   final Map<String, EndpointCheck> health = {};
   bool checking = false, changingServer = false, catalogReadable = true;
+  bool updatingCatalog = false;
   VpnProfile? get profile => catalog.selected?.profile;
   SavedProfile? get activeEndpoint =>
       catalog.profiles.where((e) => e.tag == activeTag).firstOrNull;
@@ -49,6 +50,7 @@ class AppController extends ChangeNotifier {
   bool _userStop = false;
   bool _savingLogs = false, _logsDirty = false, _disposed = false;
   bool get busy =>
+      updatingCatalog ||
       checking ||
       changingServer ||
       state == TunnelState.connecting ||
@@ -373,15 +375,65 @@ class AppController extends ChangeNotifier {
       selectedId: catalog.selectedId ?? entry.id,
       automatic: catalog.automatic,
     );
-    await storage.saveCatalog(next);
-    catalog = next;
-    health.remove(entry.tag);
-    addLog(
-      EventLevel.success,
-      'Профиль',
-      'Профиль VLESS/Reality сохранён в защищённом хранилище.',
-    );
+    updatingCatalog = true;
     notifyListeners();
+    try {
+      await storage.saveCatalog(next);
+      catalog = next;
+      health.remove(entry.tag);
+      addLog(
+        EventLevel.success,
+        'Профиль',
+        'Профиль VLESS/Reality сохранён в защищённом хранилище.',
+      );
+    } finally {
+      updatingCatalog = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteServer(String id) async {
+    if (!canEdit) {
+      throw StateError(
+        'Для удаления сервера сначала отключите VPN и дождитесь завершения операций.',
+      );
+    }
+    final entry = catalog.profiles.where((e) => e.id == id).firstOrNull;
+    if (entry == null) throw const FormatException('Сервер не найден.');
+    final remaining = catalog.profiles.where((e) => e.id != id).toList();
+    final next = ProfileCatalog(
+      profiles: remaining,
+      selectedId: remaining.isEmpty
+          ? null
+          : catalog.selectedId == id
+          ? remaining.first.id
+          : catalog.selectedId,
+      automatic: remaining.isNotEmpty && catalog.automatic,
+    );
+    next.validate();
+    updatingCatalog = true;
+    notifyListeners();
+    try {
+      // Пустой каталог тоже сохраняем: удаление записи вернуло бы старый
+      // v1-профиль через миграцию при следующем запуске.
+      await storage.saveCatalog(next);
+      catalog = next;
+      health.remove(entry.tag);
+      if (connectionCheck?.tag == entry.tag) _invalidateProbe();
+      if (activeTag == entry.tag) activeTag = null;
+      lastError = null;
+      addLog(EventLevel.success, 'Серверы', 'Сервер удалён из приложения.');
+    } catch (error) {
+      addLog(
+        EventLevel.error,
+        'Серверы',
+        'Не удалось сохранить удаление сервера. ${_safeError(error)}',
+      );
+      rethrow;
+    } finally {
+      updatingCatalog = false;
+      notifyListeners();
+    }
   }
 
   Future<void> chooseServer({String? id, required bool automatic}) async {
@@ -389,9 +441,13 @@ class AppController extends ChangeNotifier {
       throw StateError('Дождитесь завершения текущей операции.');
     }
     final previous = catalog;
-    final next = ProfileCatalog(
+    var next = ProfileCatalog(
       profiles: catalog.profiles,
-      selectedId: id ?? catalog.selectedId,
+      selectedId:
+          id ??
+          (!automatic && previous.automatic && state == TunnelState.running
+              ? activeEndpoint?.id ?? catalog.selectedId
+              : catalog.selectedId),
       automatic: automatic,
     );
     next.validate();
@@ -401,6 +457,36 @@ class AppController extends ChangeNotifier {
     try {
       if (state == TunnelState.running) {
         await engine.selectEndpoint(automatic ? 'auto' : next.selected!.tag);
+      } else if (automatic) {
+        final config = ConfigBuilder.catalog(
+          next,
+          windows: Platform.isWindows,
+          mode: mode,
+          applications: selected.map((e) => e.id).toList(),
+          probeOnly: true,
+        );
+        final results = await engine.checkEndpoints(
+          jsonEncode(config),
+          next.profiles.map((e) => e.tag).toList(),
+        );
+        for (final result in results) {
+          health[result.tag] = result;
+        }
+        final available = results.where((e) => e.available && e.fresh).toList()
+          ..sort((a, b) => a.delayMs!.compareTo(b.delayMs!));
+        if (available.isEmpty) {
+          throw const FormatException(
+            'Нет доступных серверов. Автовыбор не включён.',
+          );
+        }
+        final best = next.profiles.firstWhere(
+          (e) => e.tag == available.first.tag,
+        );
+        next = ProfileCatalog(
+          profiles: next.profiles,
+          selectedId: best.id,
+          automatic: true,
+        );
       }
       await storage.saveCatalog(next);
       catalog = next;

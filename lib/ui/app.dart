@@ -124,7 +124,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                           ),
                         const Spacer(),
                         const Text(
-                          'VLESS / Reality · 0.3.0',
+                          'VLESS / Reality · 0.3.1',
                           style: TextStyle(
                             color: muted,
                             fontSize: 10,

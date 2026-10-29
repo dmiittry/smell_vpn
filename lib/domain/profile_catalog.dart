@@ -83,7 +83,7 @@ class EndpointCheck {
   final DateTime time;
   final int? delayMs;
   final String? error;
-  bool get available => delayMs != null && error == null;
+  bool get available => delayMs != null && delayMs! > 0 && error == null;
   bool get fresh =>
       DateTime.now().difference(time) < const Duration(seconds: 90);
 }

@@ -156,6 +156,51 @@ void main() {
           ),
         );
       }
+      final toDelete = c.catalog.profiles.first.id;
+      c.state = TunnelState.running;
+      c.activeTag = c.catalog.profiles.last.tag;
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      final deleteButton = find.byKey(ValueKey('delete-$toDelete'));
+      await tester.ensureVisible(deleteButton);
+      await tester.pumpAndSettle();
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Удалить сервер?'), findsOneWidget);
+      await tester.tap(find.text('Отмена'));
+      await tester.pumpAndSettle();
+      expect(c.catalog.profiles, hasLength(2));
+      expect(c.state, TunnelState.running);
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Удалить'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(c.catalog.profiles, hasLength(1));
+      expect(c.state, TunnelState.disconnected);
+      expect(c.catalog.selectedId, c.catalog.profiles.single.id);
+      final lastDelete = find.byKey(ValueKey('delete-${c.catalog.selectedId}'));
+      await tester.ensureVisible(lastDelete);
+      await tester.pumpAndSettle();
+      await tester.tap(lastDelete);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Удалить'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(c.catalog.profiles, isEmpty);
+      expect(
+        find.text('Добавьте первый профиль из буфера обмена или вручную.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
       await tester.tap(find.text('Приложения').last);
       await tester.pumpAndSettle();
       expect(find.text('Маршрутизация'), findsOneWidget);

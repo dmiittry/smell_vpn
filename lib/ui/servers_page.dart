@@ -21,6 +21,53 @@ class _ServersPageState extends State<ServersPage> {
   AppController get c => widget.controller;
   String? error;
 
+  Future<void> delete(SavedProfile entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Удалить сервер?'),
+        content: Text(
+          '${c.state == TunnelState.running ? 'VPN будет отключён. ' : ''}«${entry.profile.name}» будет удалён из приложения. Для повторного добавления понадобится его конфигурация. Сам сервер продолжит работать.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: failure,
+              foregroundColor: canvas,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => error = null);
+    try {
+      if (c.state == TunnelState.running) {
+        await c.disconnect();
+        if (c.state != TunnelState.disconnected) {
+          throw StateError('VPN не удалось отключить.');
+        }
+      }
+      await c.deleteServer(entry.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Сервер удалён')));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => error = 'Не удалось удалить сервер. Дождитесь завершения операций и отключите VPN. Подробности в логах.',
+        );
+      }
+    }
+  }
+
   Future<void> choose({String? id, required bool automatic}) async {
     if (c.state == TunnelState.running) {
       final confirmed = await showDialog<bool>(
@@ -48,10 +95,12 @@ class _ServersPageState extends State<ServersPage> {
     setState(() => error = null);
     try {
       await c.chooseServer(id: id, automatic: automatic);
-    } catch (_) {
+    } catch (failureError) {
       if (mounted) {
         setState(
-          () => error = 'Сервер не удалось выбрать. Подробности в логах.',
+          () => error = failureError is FormatException
+              ? failureError.message
+              : 'Сервер не удалось выбрать. Подробности в логах.',
         );
       }
     }
@@ -137,6 +186,15 @@ class _ServersPageState extends State<ServersPage> {
                     c.state == TunnelState.running ? 'Переключить' : 'Выбрать',
                   ),
                 ),
+                TextButton.icon(
+                  key: ValueKey('delete-${entry.id}'),
+                  onPressed: !c.busy && c.catalogReadable
+                      ? () => delete(entry)
+                      : null,
+                  style: TextButton.styleFrom(foregroundColor: failure),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text('Удалить'),
+                ),
               ],
             ),
           ],
@@ -150,6 +208,13 @@ class _ServersPageState extends State<ServersPage> {
     children: [
       Text('Серверы', style: Theme.of(context).textTheme.headlineLarge),
       const SizedBox(height: 24),
+      if (c.state == TunnelState.running) ...[
+        const Text(
+          'При удалении сервера работающий VPN будет отключён.',
+          style: TextStyle(color: muted),
+        ),
+        const SizedBox(height: 16),
+      ],
       if (error != null) ...[ErrorNotice(error!), const SizedBox(height: 16)],
       if (!c.catalogReadable) ...[
         const ErrorNotice(

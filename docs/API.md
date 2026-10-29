@@ -4,6 +4,8 @@
 
 ## VpnEngine
 
+В 0.3.1 AppController.deleteServer(id) сохраняет новый каталог после отключения VPN. Внутренний CoreControl.select('auto') сначала проверяет профили и обновляет группу URLTest, затем переключает selector; отсутствие доступного профиля возвращает ошибку. Выключение автоматики в AppController сохраняет фактический активный сервер.
+
 `initialize`, `connect(config, mode, packages, profileNames)`, `selectEndpoint(tag)`, `checkEndpoints(config, tags, requireRunning: false)`, `disconnect`, `applications`, `dispose`; поток `EngineEvent` содержит состояние туннеля, сообщения, статистику, фактический выбранный tag и результаты проверок. Внутренний необязательный флаг `requireRunning: true` используется для пинга главного экрана: если работающее ядро уже остановлено, вызов завершается ошибкой и не запускает временный сервис проверки.
 
 `AppController.checkConnection()` проверяет фактический активный сервер текущей сессии. `connectionCheck`, `verifyingConnection`, `connectionVerified` описывают результат отдельно от состояния VPN-сервиса. Неудачная проба попадает в фильтр ошибок журнала.
